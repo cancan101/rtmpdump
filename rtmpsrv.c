@@ -98,7 +98,7 @@ void stopStreaming(STREAMING_SERVER * server);
 void AVreplace(AVal *src, const AVal *orig, const AVal *repl);
 char *strreplace(char *srcstr, int srclen, char *orig, char *repl);
 int file_exists(const char *fname);
-int SendCheckBWResponse(RTMP *r, double txn);
+int SendCheckBWResponse(RTMP *r, int oldMethodType, int onBWDoneInit);
 AVal StripParams(AVal *src);
 
 static const AVal av_dquote = AVC("\"");
@@ -177,8 +177,11 @@ SAVC(level);
 SAVC(code);
 SAVC(description);
 SAVC(secureToken);
+SAVC(clientid);
 SAVC(_checkbw);
 SAVC(_onbwdone);
+SAVC(checkBandwidth);
+SAVC(onBWDone);
 
 static int
 SendConnectResult(RTMP *r, double txn)
@@ -202,7 +205,7 @@ SendConnectResult(RTMP *r, double txn)
   enc = AMF_EncodeNumber(enc, pend, txn);
   *enc++ = AMF_OBJECT;
 
-  STR2AVAL(av, "FMS/3,5,1,525");
+  STR2AVAL(av, "FMS/3,5,7,7009");
   enc = AMF_EncodeNamedString(enc, pend, &av_fmsVer, &av);
   enc = AMF_EncodeNamedNumber(enc, pend, &av_capabilities, 31.0);
   enc = AMF_EncodeNamedNumber(enc, pend, &av_mode, 1.0);
@@ -224,7 +227,7 @@ SendConnectResult(RTMP *r, double txn)
   enc = AMF_EncodeNamedString(enc, pend, &av_secureToken, &av);
 #endif
   STR2AVAL(p.p_name, "version");
-  STR2AVAL(p.p_vu.p_aval, "3,5,1,525");
+  STR2AVAL(p.p_vu.p_aval, "3,5,7,7009");
   p.p_type = AMF_STRING;
   obj.o_num = 1;
   obj.o_props = &p;
@@ -273,7 +276,6 @@ static const AVal av_Started_playing = AVC("Started playing");
 static const AVal av_NetStream_Play_Stop = AVC("NetStream.Play.Stop");
 static const AVal av_Stopped_playing = AVC("Stopped playing");
 SAVC(details);
-SAVC(clientid);
 static const AVal av_NetStream_Authenticate_UsherToken = AVC("NetStream.Authenticate.UsherToken");
 
 static int
@@ -341,7 +343,7 @@ SendPlayStop(RTMP *r)
 }
 
 int
-SendCheckBWResponse(RTMP *r, double txn)
+SendCheckBWResponse(RTMP *r, int oldMethodType, int onBWDoneInit)
 {
   RTMPPacket packet;
   char pbuf[256], *pend = pbuf + sizeof (pbuf);
@@ -356,11 +358,27 @@ SendCheckBWResponse(RTMP *r, double txn)
   packet.m_body = pbuf + RTMP_MAX_HEADER_SIZE;
 
   enc = packet.m_body;
-  enc = AMF_EncodeString(enc, pend, &av__onbwdone);
-  enc = AMF_EncodeNumber(enc, pend, txn);
-  *enc++ = AMF_NULL;
-  enc = AMF_EncodeNumber(enc, pend, 10240);
-  enc = AMF_EncodeNumber(enc, pend, 10240);
+  if (oldMethodType)
+    {
+      enc = AMF_EncodeString(enc, pend, &av__onbwdone);
+      enc = AMF_EncodeNumber(enc, pend, 0);
+      *enc++ = AMF_NULL;
+      enc = AMF_EncodeNumber(enc, pend, 10240);
+      enc = AMF_EncodeNumber(enc, pend, 10240);
+    }
+  else
+    {
+      enc = AMF_EncodeString(enc, pend, &av_onBWDone);
+      enc = AMF_EncodeNumber(enc, pend, 0);
+      *enc++ = AMF_NULL;
+      if (!onBWDoneInit)
+        {
+          enc = AMF_EncodeNumber(enc, pend, 10240);
+          enc = AMF_EncodeNumber(enc, pend, 10240);
+          enc = AMF_EncodeNumber(enc, pend, 0);
+          enc = AMF_EncodeNumber(enc, pend, 0);
+        }
+    }
 
   packet.m_nBodySize = enc - packet.m_body;
 
@@ -607,6 +625,7 @@ ServeInvoke(STREAMING_SERVER *server, RTMP * r, RTMPPacket *packet, unsigned int
 	  server->arglen += countAMF(&r->Link.extras, &server->argc);
 	}
       SendConnectResult(r, txn);
+      SendCheckBWResponse(r, FALSE, TRUE);
     }
   else if (AVMATCH(&method, &av_createStream))
     {
@@ -631,7 +650,11 @@ ServeInvoke(STREAMING_SERVER *server, RTMP * r, RTMPPacket *packet, unsigned int
     }
   else if (AVMATCH(&method, &av__checkbw))
     {
-      SendCheckBWResponse(r, txn);
+      SendCheckBWResponse(r, TRUE, FALSE);
+    }
+  else if (AVMATCH(&method, &av_checkBandwidth))
+    {
+      SendCheckBWResponse(r, FALSE, FALSE);
     }
   else if (AVMATCH(&method, &av_play))
     {
@@ -1325,9 +1348,9 @@ file_exists(const char *fname)
   if ((file = fopen(fname, "r")))
     {
       fclose(file);
-      return 1;
+      return TRUE;
     }
-  return 0;
+  return FALSE;
 }
 
 void

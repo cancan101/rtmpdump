@@ -179,6 +179,7 @@ extern "C"
     int protocol;
     int ConnectPacket;
     int CombineConnectPacket;
+    int redirected;
     int timeout;		/* connection timeout in seconds */
     AVal Extras;
     AVal HandshakeResponse;

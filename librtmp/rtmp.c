@@ -2449,7 +2449,7 @@ HandleInvoke(RTMP *r, const char *body, unsigned int nBodySize)
 	    }
           if (strstr(host, "tv-stream.to") || strstr(pageUrl, "tv-stream.to"))
             {
-              AVal av_requestAccess = AVC("requestAccess");
+              SAVC(requestAccess);
               AVal av_auth = AVC("h§4jhH43d");
               enc = pbuf;
               enc = AMF_EncodeString(enc, pend, &av_requestAccess);
@@ -2460,7 +2460,7 @@ HandleInvoke(RTMP *r, const char *body, unsigned int nBodySize)
               av_Command.av_len = enc - pbuf;
               SendCustomCommand(r, &av_Command, FALSE);
 
-              AVal av_getConnectionCount = AVC("getConnectionCount");
+              SAVC(getConnectionCount);
               enc = pbuf;
               enc = AMF_EncodeString(enc, pend, &av_getConnectionCount);
               enc = AMF_EncodeNumber(enc, pend, 0);
@@ -2478,7 +2478,7 @@ HandleInvoke(RTMP *r, const char *body, unsigned int nBodySize)
           else if (strstr(host, "streamscene.cc") || strstr(pageUrl, "streamscene.cc")
                    || strstr(host, "tsboard.tv") || strstr(pageUrl, "teamstream.in"))
             {
-              AVal av_r = AVC("r");
+              SAVC(r);
               enc = pbuf;
               enc = AMF_EncodeString(enc, pend, &av_r);
               enc = AMF_EncodeNumber(enc, pend, 0);
@@ -2492,7 +2492,7 @@ HandleInvoke(RTMP *r, const char *body, unsigned int nBodySize)
           else if (strstr(host, "chaturbate.com") || strstr(pageUrl, "chaturbate.com"))
             {
               AVal av_ModelName;
-              AVal av_CheckPublicStatus = AVC("CheckPublicStatus");
+              SAVC(CheckPublicStatus);
 
               if (strlen(pageUrl) > 7)
                 {
@@ -2510,12 +2510,17 @@ HandleInvoke(RTMP *r, const char *body, unsigned int nBodySize)
 
                   SendCustomCommand(r, &av_Command, FALSE);
                 }
+              else
+                {
+                  RTMP_Log(RTMP_LOGERROR, "you must specify pageUrl");
+                  RTMP_Close(r);
+                }
             }
           /* Weeb.tv specific authentication */
           else if (r->Link.WeebToken.av_len)
             {
               AVal av_Token, av_Username, av_Password;
-              AVal av_determineAccess = AVC("determineAccess");
+              SAVC(determineAccess);
 
               param_count = strsplit(r->Link.WeebToken.av_val, FALSE, ';', &params);
               if (param_count >= 1)
@@ -2623,12 +2628,54 @@ HandleInvoke(RTMP *r, const char *body, unsigned int nBodySize)
     }
   else if (AVMATCH(&method, &av__error))
     {
-      RTMP_Log(RTMP_LOGERROR, "rtmp server sent error");
+      double code = 0;
+      unsigned int parsedPort;
+      AMFObject obj2;
+      AMFObjectProperty p;
+      AVal redirect;
+      SAVC(ex);
+      SAVC(redirect);
+
+      AMFProp_GetObject(AMF_GetProp(&obj, NULL, 3), &obj2);
+      if (RTMP_FindFirstMatchingProperty(&obj2, &av_ex, &p))
+        {
+          AMFProp_GetObject(&p, &obj2);
+          if (RTMP_FindFirstMatchingProperty(&obj2, &av_code, &p))
+            code = AMFProp_GetNumber(&p);
+          if (code == 302 && RTMP_FindFirstMatchingProperty(&obj2, &av_redirect, &p))
+            {
+              AMFProp_GetString(&p, &redirect);
+              r->Link.redirected = TRUE;
+
+              char *url = malloc(redirect.av_len + sizeof ("/playpath"));
+              strncpy(url, redirect.av_val, redirect.av_len);
+              url[redirect.av_len] = '\0';
+              r->Link.tcUrl.av_val = url;
+              r->Link.tcUrl.av_len = redirect.av_len;
+              strcat(url, "/playpath");
+              RTMP_ParseURL(url, &r->Link.protocol, &r->Link.hostname, &parsedPort, &r->Link.playpath0, &r->Link.app);
+              r->Link.port = parsedPort;
+            }
+        }
+      if (r->Link.redirected)
+        RTMP_Log(RTMP_LOGINFO, "rtmp server sent redirect");
+      else
+        RTMP_Log(RTMP_LOGERROR, "rtmp server sent error");
     }
   else if (AVMATCH(&method, &av_close))
     {
-      RTMP_Log(RTMP_LOGERROR, "rtmp server requested close");
-      RTMP_Close(r);
+      if (r->Link.redirected)
+        {
+          RTMP_Log(RTMP_LOGINFO, "trying to connect with redirected url");
+          RTMP_Close(r);
+          r->Link.redirected = FALSE;
+          RTMP_Connect(r, NULL);
+        }
+      else
+        {
+          RTMP_Log(RTMP_LOGERROR, "rtmp server requested close");
+          RTMP_Close(r);
+        }
     }
   else if (AVMATCH(&method, &av_onStatus))
     {
@@ -2734,7 +2781,6 @@ HandleInvoke(RTMP *r, const char *body, unsigned int nBodySize)
     {
       if (r->Link.WeebToken.av_len)
         {
-          AVal av_Code = AVC("code");
           AVal av_Authorized = AVC("User.hasAccess");
           AVal av_TransferLimit = AVC("User.noPremium.limited");
           AVal av_UserLimit = AVC("User.noPremium.tooManyUsers");
@@ -2743,7 +2789,7 @@ HandleInvoke(RTMP *r, const char *body, unsigned int nBodySize)
 
           AMFObject Status;
           AMFProp_GetObject(AMF_GetProp(&obj, NULL, 3), &Status);
-          AMFProp_GetString(AMF_GetProp(&Status, &av_Code, -1), &av_Status);
+          AMFProp_GetString(AMF_GetProp(&Status, &av_code, -1), &av_Status);
           RTMP_Log(RTMP_LOGINFO, "%.*s", av_Status.av_len, av_Status.av_val);
           if (AVMATCH(&av_Status, &av_Authorized))
             {
@@ -2767,7 +2813,7 @@ HandleInvoke(RTMP *r, const char *body, unsigned int nBodySize)
     {
       AVal Status;
       AMFProp_GetString(AMF_GetProp(&obj, NULL, 3), &Status);
-      param_count = strsplit(Status.av_val, Status.av_len, ',', &params);
+      strsplit(Status.av_val, Status.av_len, ',', &params);
       if (strcmp(params[0], "0") == 0)
         {
           RTMP_Log(RTMP_LOGINFO, "Model status is %s", params[1]);
@@ -2776,11 +2822,9 @@ HandleInvoke(RTMP *r, const char *body, unsigned int nBodySize)
       else
         {
           AVal Playpath;
-          char *str = malloc(sizeof ("mp4:") + strlen(params[1]));
-          str = strcpy(str, "mp4:");
-          Playpath.av_val = strcat(str, params[1]);
-          Playpath.av_len = strlen(Playpath.av_val);
-          r->Link.playpath = Playpath;
+          Playpath.av_val = params[1];
+          Playpath.av_len = strlen(params[1]);
+          RTMP_ParsePlaypath(&Playpath, &r->Link.playpath);
           RTMP_SendCreateStream(r);
         }
     }
