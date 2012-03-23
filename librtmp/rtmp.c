@@ -2512,7 +2512,7 @@ HandleInvoke(RTMP *r, const char *body, unsigned int nBodySize)
                 }
               else
                 {
-                  RTMP_Log(RTMP_LOGERROR, "you must specify pageUrl");
+                  RTMP_Log(RTMP_LOGERROR, "you must specify the pageUrl");
                   RTMP_Close(r);
                 }
             }

@@ -99,6 +99,7 @@ void AVreplace(AVal *src, const AVal *orig, const AVal *repl);
 char *strreplace(char *srcstr, int srclen, char *orig, char *repl);
 int file_exists(const char *fname);
 int SendCheckBWResponse(RTMP *r, int oldMethodType, int onBWDoneInit);
+AVal AVcopy(AVal src);
 AVal StripParams(AVal *src);
 
 static const AVal av_dquote = AVC("\"");
@@ -177,7 +178,6 @@ SAVC(level);
 SAVC(code);
 SAVC(description);
 SAVC(secureToken);
-SAVC(clientid);
 SAVC(_checkbw);
 SAVC(_onbwdone);
 SAVC(checkBandwidth);
@@ -276,6 +276,7 @@ static const AVal av_Started_playing = AVC("Started playing");
 static const AVal av_NetStream_Play_Stop = AVC("NetStream.Play.Stop");
 static const AVal av_Stopped_playing = AVC("Stopped playing");
 SAVC(details);
+SAVC(clientid);
 static const AVal av_NetStream_Authenticate_UsherToken = AVC("NetStream.Authenticate.UsherToken");
 
 static int
@@ -669,16 +670,14 @@ ServeInvoke(STREAMING_SERVER *server, RTMP * r, RTMPPacket *packet, unsigned int
       if (obj.o_num > 5)
 	r->Link.length = AMFProp_GetNumber(AMF_GetProp(&obj, NULL, 5));
       */
-#ifdef VLC
-      double StartFlag = -1000;
-#else
       double StartFlag = 0;
-#endif
       AMFObjectProperty *Start = AMF_GetProp(&obj, NULL, 4);
       if (!(Start->p_type == AMF_INVALID))
         StartFlag = AMFProp_GetNumber(Start);
-      if (StartFlag < 0)
+      r->Link.app = AVcopy(r->Link.app);
+      if (StartFlag == -1000 || strstr(r->Link.app.av_val, "live"))
         {
+          StartFlag = -1000;
           server->arglen += 7;
           server->argc += 1;
         }
@@ -747,7 +746,7 @@ ServeInvoke(STREAMING_SERVER *server, RTMP * r, RTMPPacket *packet, unsigned int
 	      r->Link.usherToken.av_val = NULL;
 	      r->Link.usherToken.av_len = 0;
 	    }
-          if (StartFlag < 0)
+          if (StartFlag == -1000)
             {
               argv[argc].av_val = ptr + 1;
               argv[argc++].av_len = 6;
@@ -1260,6 +1259,46 @@ main(int argc, char **argv)
   return nStatus;
 }
 
+void
+AVreplace(AVal *src, const AVal *orig, const AVal *repl)
+{
+  char *srcbeg = src->av_val;
+  char *srcend = src->av_val + src->av_len;
+  char *dest, *sptr, *dptr;
+  int n = 0;
+
+  /* count occurrences of orig in src */
+  sptr = src->av_val;
+  while (sptr < srcend && (sptr = strstr(sptr, orig->av_val)))
+    {
+      n++;
+      sptr += orig->av_len;
+    }
+  if (!n)
+    return;
+
+  dest = malloc(src->av_len + 1 + (repl->av_len - orig->av_len) * n);
+
+  sptr = src->av_val;
+  dptr = dest;
+  while (sptr < srcend && (sptr = strstr(sptr, orig->av_val)))
+    {
+      n = sptr - srcbeg;
+      memcpy(dptr, srcbeg, n);
+      dptr += n;
+      memcpy(dptr, repl->av_val, repl->av_len);
+      dptr += repl->av_len;
+      sptr += orig->av_len;
+      srcbeg = sptr;
+    }
+  n = srcend - srcbeg;
+  memcpy(dptr, srcbeg, n);
+  dptr += n;
+  *dptr = '\0';
+  src->av_val = dest;
+  src->av_len = dptr - dest;
+}
+
 char *
 strreplace(char *srcstr, int srclen, char *orig, char *repl)
 {
@@ -1353,42 +1392,21 @@ file_exists(const char *fname)
   return FALSE;
 }
 
-void
-AVreplace(AVal *src, const AVal *orig, const AVal *repl)
+AVal
+AVcopy(AVal src)
 {
-  char *srcbeg = src->av_val;
-  char *srcend = src->av_val + src->av_len;
-  char *dest, *sptr, *dptr;
-  int n = 0;
-
-  /* count occurrences of orig in src */
-  sptr = src->av_val;
-  while (sptr < srcend && (sptr = strstr(sptr, orig->av_val)))
+  AVal dst;
+  if (src.av_len)
     {
-      n++;
-      sptr += orig->av_len;
+      dst.av_val = malloc(src.av_len + 1);
+      memcpy(dst.av_val, src.av_val, src.av_len);
+      dst.av_val[src.av_len] = '\0';
+      dst.av_len = src.av_len;
     }
-  if (!n)
-    return;
-
-  dest = malloc(src->av_len + 1 + (repl->av_len - orig->av_len) * n);
-
-  sptr = src->av_val;
-  dptr = dest;
-  while (sptr < srcend && (sptr = strstr(sptr, orig->av_val)))
+  else
     {
-      n = sptr - srcbeg;
-      memcpy(dptr, srcbeg, n);
-      dptr += n;
-      memcpy(dptr, repl->av_val, repl->av_len);
-      dptr += repl->av_len;
-      sptr += orig->av_len;
-      srcbeg = sptr;
+      dst.av_val = NULL;
+      dst.av_len = 0;
     }
-  n = srcend - srcbeg;
-  memcpy(dptr, srcbeg, n);
-  dptr += n;
-  *dptr = '\0';
-  src->av_val = dest;
-  src->av_len = dptr - dest;
+  return dst;
 }

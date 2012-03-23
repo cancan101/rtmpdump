@@ -153,8 +153,8 @@ static const AVal av_NetStream_Authenticate_UsherToken = AVC("NetStream.Authenti
 static const char *cst[] = { "client", "server" };
 char *dumpAMF(AMFObject *obj, char *ptr);
 char *strreplace(char *srcstr, int srclen, char *orig, char *repl);
-AVal StripParams(AVal *src);
 AVal AVcopy(AVal src);
+AVal StripParams(AVal *src);
 
 // Returns 0 for OK/Failed/error, 1 for 'Stop or Complete'
 int
@@ -219,8 +219,7 @@ ServeInvoke(STREAMING_SERVER *server, int which, RTMPPacket *pack, const char *b
               if (pval.av_val)
                 {
                   AVal swfUrl = StripParams(&pval);
-                  RTMP_HashSWF(swfUrl.av_val, &server->rc.Link.SWFSize,
-                               (unsigned char *) server->rc.Link.SWFHash, 30);
+                  RTMP_HashSWF(swfUrl.av_val, &server->rc.Link.SWFSize, (unsigned char *) server->rc.Link.SWFHash, 30);
                 }
 #endif
               server->rc.Link.swfUrl = AVcopy(pval);
@@ -350,7 +349,9 @@ ServeInvoke(STREAMING_SERVER *server, int which, RTMPPacket *pack, const char *b
       AMFObjectProperty *Start = AMF_GetProp(&obj, NULL, 4);
       if (!(Start->p_type == AMF_INVALID))
         StartFlag = AMFProp_GetNumber(Start);
-      RTMP_LogPrintf("%10s : %s\n", "live", (StartFlag < 0) ? "yes" : "no");
+      if (StartFlag == -1000 || strstr(server->rc.Link.app.av_val, "live"))
+        StartFlag = -1000;
+      RTMP_LogPrintf("%10s : %s\n", "live", (StartFlag == -1000) ? "yes" : "no");
 
       /* check for duplicates */
       for (fl = server->f_head; fl; fl=fl->f_next)
@@ -434,7 +435,7 @@ ServeInvoke(STREAMING_SERVER *server, int which, RTMPPacket *pack, const char *b
           ptr += sprintf(ptr, "%.*s", server->rc.Link.Extras.av_len, server->rc.Link.Extras.av_val);
         }
 
-      if (StartFlag < 0)
+      if (StartFlag == -1000)
         ptr += sprintf(ptr, "%s", " --live");
       ptr += sprintf(ptr, " -y \"%.*s\"", server->rc.Link.playpath.av_len, server->rc.Link.playpath.av_val);
       ptr += sprintf(ptr, " -o \"%s.flv\"\n", file);
@@ -1398,8 +1399,9 @@ AVcopy(AVal src)
   AVal dst;
   if (src.av_len)
     {
-      dst.av_val = malloc(src.av_len);
+      dst.av_val = malloc(src.av_len + 1);
       memcpy(dst.av_val, src.av_val, src.av_len);
+      dst.av_val[src.av_len] = '\0';
       dst.av_len = src.av_len;
     }
   else
