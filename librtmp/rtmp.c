@@ -99,7 +99,7 @@ static int SendFCSubscribe(RTMP *r, AVal *subscribepath);
 static int SendPlay(RTMP *r);
 static int SendBytesReceived(RTMP *r);
 static int SendUsherToken(RTMP *r, AVal *usherToken);
-static int SendCustomCommand(RTMP *r, AVal *Command, int queue);
+static int SendInvoke(RTMP *r, AVal *Command, int queue);
 static int SendGetStreamLength(RTMP *r);
 static int strsplit(char *src, int srclen, char delim, char ***params);
 
@@ -1708,7 +1708,7 @@ SendUsherToken(RTMP *r, AVal *usherToken)
   packet.m_hasAbsTimestamp = 0;
   packet.m_body = pbuf + RTMP_MAX_HEADER_SIZE;
 
-  RTMP_Log(RTMP_LOGDEBUG, "UsherToken: %s", usherToken->av_val);
+  RTMP_Log(RTMP_LOGDEBUG, "UsherToken: %.*s", usherToken->av_len, usherToken->av_val);
   enc = packet.m_body;
   enc = AMF_EncodeString(enc, pend, &av_NetStream_Authenticate_UsherToken);
   enc = AMF_EncodeNumber(enc, pend, ++r->m_numInvokes);
@@ -2354,6 +2354,7 @@ SAVC(_error);
 SAVC(close);
 SAVC(code);
 SAVC(level);
+SAVC(description);
 SAVC(onStatus);
 SAVC(playlist_ready);
 static const AVal av_NetStream_Failed = AVC("NetStream.Failed");
@@ -2367,6 +2368,7 @@ static const AVal av_NetStream_Seek_Notify = AVC("NetStream.Seek.Notify");
 static const AVal av_NetStream_Pause_Notify = AVC("NetStream.Pause.Notify");
 static const AVal av_NetStream_Play_PublishNotify = AVC("NetStream.Play.PublishNotify");
 static const AVal av_NetStream_Play_UnpublishNotify = AVC("NetStream.Play.UnpublishNotify");
+static const AVal av_NetConnection_confStream = AVC("NetConnection.confStream");
 static const AVal av_NetStream_Publish_Start = AVC("NetStream.Publish.Start");
 static const AVal av_verifyClient = AVC("verifyClient");
 static const AVal av_sendStatus = AVC("sendStatus");
@@ -2450,24 +2452,24 @@ HandleInvoke(RTMP *r, const char *body, unsigned int nBodySize)
           if (strstr(host, "tv-stream.to") || strstr(pageUrl, "tv-stream.to"))
             {
               SAVC(requestAccess);
-              AVal av_auth = AVC("h§4jhH43d");
+              AVal av_auth = AVC("hÂ§4jhH43d");
               enc = pbuf;
               enc = AMF_EncodeString(enc, pend, &av_requestAccess);
-              enc = AMF_EncodeNumber(enc, pend, 0);
+              enc = AMF_EncodeNumber(enc, pend, ++r->m_numInvokes);
               *enc++ = AMF_NULL;
               enc = AMF_EncodeString(enc, pend, &av_auth);
               av_Command.av_val = pbuf;
               av_Command.av_len = enc - pbuf;
-              SendCustomCommand(r, &av_Command, FALSE);
+              SendInvoke(r, &av_Command, FALSE);
 
               SAVC(getConnectionCount);
               enc = pbuf;
               enc = AMF_EncodeString(enc, pend, &av_getConnectionCount);
-              enc = AMF_EncodeNumber(enc, pend, 0);
+              enc = AMF_EncodeNumber(enc, pend, ++r->m_numInvokes);
               *enc++ = AMF_NULL;
               av_Command.av_val = pbuf;
               av_Command.av_len = enc - pbuf;
-              SendCustomCommand(r, &av_Command, FALSE);
+              SendInvoke(r, &av_Command, FALSE);
 
               SendGetStreamLength(r);
             }
@@ -2481,11 +2483,11 @@ HandleInvoke(RTMP *r, const char *body, unsigned int nBodySize)
               SAVC(r);
               enc = pbuf;
               enc = AMF_EncodeString(enc, pend, &av_r);
-              enc = AMF_EncodeNumber(enc, pend, 0);
+              enc = AMF_EncodeNumber(enc, pend, ++r->m_numInvokes);
               *enc++ = AMF_NULL;
               av_Command.av_val = pbuf;
               av_Command.av_len = enc - pbuf;
-              SendCustomCommand(r, &av_Command, FALSE);
+              SendInvoke(r, &av_Command, FALSE);
 
               SendGetStreamLength(r);
             }
@@ -2502,13 +2504,13 @@ HandleInvoke(RTMP *r, const char *body, unsigned int nBodySize)
 
                   enc = pbuf;
                   enc = AMF_EncodeString(enc, pend, &av_CheckPublicStatus);
-                  enc = AMF_EncodeNumber(enc, pend, 0);
+                  enc = AMF_EncodeNumber(enc, pend, ++r->m_numInvokes);
                   *enc++ = AMF_NULL;
                   enc = AMF_EncodeString(enc, pend, &av_ModelName);
                   av_Command.av_val = pbuf;
                   av_Command.av_len = enc - pbuf;
 
-                  SendCustomCommand(r, &av_Command, FALSE);
+                  SendInvoke(r, &av_Command, FALSE);
                 }
               else
                 {
@@ -2541,7 +2543,7 @@ HandleInvoke(RTMP *r, const char *body, unsigned int nBodySize)
 
               enc = pbuf;
               enc = AMF_EncodeString(enc, pend, &av_determineAccess);
-              enc = AMF_EncodeNumber(enc, pend, 0);
+              enc = AMF_EncodeNumber(enc, pend, ++r->m_numInvokes);
               *enc++ = AMF_NULL;
               enc = AMF_EncodeString(enc, pend, &av_Token);
               enc = AMF_EncodeString(enc, pend, &av_Username);
@@ -2550,7 +2552,7 @@ HandleInvoke(RTMP *r, const char *body, unsigned int nBodySize)
               av_Command.av_len = enc - pbuf;
 
               RTMP_Log(RTMP_LOGDEBUG, "WeebToken: %s", r->Link.WeebToken.av_val);
-              SendCustomCommand(r, &av_Command, FALSE);
+              SendInvoke(r, &av_Command, FALSE);
             }
           else
             RTMP_SendCreateStream(r);
@@ -2680,10 +2682,11 @@ HandleInvoke(RTMP *r, const char *body, unsigned int nBodySize)
   else if (AVMATCH(&method, &av_onStatus))
     {
       AMFObject obj2;
-      AVal code, level;
+      AVal code, level, description;
       AMFProp_GetObject(AMF_GetProp(&obj, NULL, 3), &obj2);
       AMFProp_GetString(AMF_GetProp(&obj2, &av_code, -1), &code);
       AMFProp_GetString(AMF_GetProp(&obj2, &av_level, -1), &level);
+      AMFProp_GetString(AMF_GetProp(&obj2, &av_description, -1), &description);
 
       RTMP_Log(RTMP_LOGDEBUG, "%s, onStatus: %s", __FUNCTION__, code.av_val);
       if (AVMATCH(&code, &av_NetStream_Failed)
@@ -2747,6 +2750,44 @@ HandleInvoke(RTMP *r, const char *body, unsigned int nBodySize)
 	    r->m_pausing = 3;
 	  }
 	}
+
+      else if (AVMATCH(&code, &av_NetConnection_confStream))
+        {
+          static const char hexdig[] = "0123456789abcdef";
+          SAVC(cf_stream);
+          int i;
+          char hash_hex[33] = {0};
+          unsigned char hash[16];
+          AVal auth;
+
+          param_count = strsplit(description.av_val, description.av_len, ':', &params);
+          if (param_count >= 3)
+            {
+              char *buf = malloc(strlen(params[0]) + r->Link.playpath.av_len + 1);
+              strcpy(buf, params[0]);
+              strncat(buf, r->Link.playpath.av_val, r->Link.playpath.av_len);
+              md5_hash((unsigned char *) buf, strlen(buf), hash);
+              for (i = 0; i < 16; i++)
+                {
+                  hash_hex[i * 2] = hexdig[0x0f & (hash[i] >> 4)];
+                  hash_hex[i * 2 + 1] = hexdig[0x0f & (hash[i])];
+                }
+              auth.av_val = &hash_hex[atoi(params[1]) - 1];
+              auth.av_len = atoi(params[2]);
+              RTMP_Log(RTMP_LOGDEBUG, "Khalsa: %.*s", auth.av_len, auth.av_val);
+
+              enc = pbuf;
+              enc = AMF_EncodeString(enc, pend, &av_cf_stream);
+              enc = AMF_EncodeNumber(enc, pend, txn);
+              *enc++ = AMF_NULL;
+              enc = AMF_EncodeString(enc, pend, &auth);
+              av_Command.av_val = pbuf;
+              av_Command.av_len = enc - pbuf;
+
+              SendInvoke(r, &av_Command, FALSE);
+              free(buf);
+            }
+        }
     }
   else if (AVMATCH(&method, &av_playlist_ready))
     {
@@ -2767,7 +2808,7 @@ HandleInvoke(RTMP *r, const char *body, unsigned int nBodySize)
 
       enc = pbuf;
       enc = AMF_EncodeString(enc, pend, &av__result);
-      enc = AMF_EncodeNumber(enc, pend, AMFProp_GetNumber(AMF_GetProp(&obj, NULL, 1)));
+      enc = AMF_EncodeNumber(enc, pend, txn);
       *enc++ = AMF_NULL;
       enc = AMF_EncodeNumber(enc, pend, exp(atan(sqrt(VerificationNumber))) + 1);
       av_Response.av_val = pbuf;
@@ -2775,7 +2816,7 @@ HandleInvoke(RTMP *r, const char *body, unsigned int nBodySize)
 
       AMF_Decode(&obj, av_Response.av_val, av_Response.av_len, FALSE);
       AMF_Dump(&obj);
-      SendCustomCommand(r, &av_Response, FALSE);
+      SendInvoke(r, &av_Response, FALSE);
     }
   else if (AVMATCH(&method, &av_sendStatus))
     {
@@ -4732,7 +4773,7 @@ RTMP_Write(RTMP *r, const char *buf, int size)
 }
 
 static int
-SendCustomCommand(RTMP *r, AVal *Command, int queue)
+SendInvoke(RTMP *r, AVal *Command, int queue)
 {
   RTMPPacket packet;
   char pbuf[512], *enc;
@@ -4815,5 +4856,5 @@ SendGetStreamLength(RTMP *r)
   av_Command.av_val = pbuf;
   av_Command.av_len = enc - pbuf;
 
-  return SendCustomCommand(r, &av_Command, TRUE);
+  return SendInvoke(r, &av_Command, TRUE);
 }
