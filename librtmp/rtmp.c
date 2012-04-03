@@ -4614,13 +4614,21 @@ fail:
 		  r->m_read.status = nRead;
 		  goto fail;
 		}
-	      /* buffer overflow, fix buffer and give up */
-	      if (r->m_read.buf < mybuf || r->m_read.buf > end) {
-	      	mybuf = realloc(mybuf, cnt + nRead);
-		memcpy(mybuf+cnt, r->m_read.buf, nRead);
-		r->m_read.buf = mybuf+cnt+nRead;
-	        break;
-	      }
+              /* buffer overflow, fix buffer and give up */
+              if (r->m_read.buf < mybuf || r->m_read.buf > end)
+                {
+                  if (!cnt)
+                    {
+                      mybuf = realloc(mybuf, sizeof (flvHeader) + cnt + nRead);
+                      memcpy(mybuf, flvHeader, sizeof (flvHeader));
+                      cnt += sizeof (flvHeader);
+                    }
+                  else
+                    mybuf = realloc(mybuf, cnt + nRead);
+                  memcpy(mybuf + cnt, r->m_read.buf, nRead);
+                  r->m_read.buf = mybuf + cnt + nRead;
+                  break;
+                }
 	      cnt += nRead;
 	      r->m_read.buf += nRead;
 	      r->m_read.buflen -= nRead;
