@@ -881,6 +881,8 @@ RTMP_Connect0(RTMP *r, struct sockaddr * service)
   }
 
   setsockopt(r->m_sb.sb_socket, IPPROTO_TCP, TCP_NODELAY, (char *) &on, sizeof(on));
+  if (r->Link.protocol & RTMP_FEATURE_HTTP)
+    setsockopt(r->m_sb.sb_socket, SOL_SOCKET, SO_KEEPALIVE, (char *) &on, sizeof (on));
 
   return TRUE;
 }
@@ -1335,10 +1337,24 @@ ReadN(RTMP *r, char *buffer, int n)
 		  return 0;
 		}
 	    }
-          if (r->m_resplen && (r->m_sb.sb_size < r->m_resplen))
-            if (RTMPSockBuf_Fill(&r->m_sb) < 0)
-              if (!r->m_sb.sb_timedout)
-                RTMP_Close(r);
+
+          // Try to fill the whole buffer. previous buffer needs to be consumed
+          // completely before receiving new data.
+          if (r->m_resplen && (r->m_sb.sb_size <= 0))
+            {
+              do
+                {
+                  nBytes = RTMPSockBuf_Fill(&r->m_sb);
+                  if (nBytes == -1)
+                    {
+                      if (!r->m_sb.sb_timedout)
+                        RTMP_Close(r);
+                      return 0;
+                    }
+                }
+              while (r->m_resplen && (r->m_sb.sb_size < r->m_resplen) && (nBytes > 0));
+            }
+
           avail = r->m_sb.sb_size;
 	  if (avail > r->m_resplen)
 	    avail = r->m_resplen;
@@ -1365,9 +1381,9 @@ ReadN(RTMP *r, char *buffer, int n)
 	  r->m_sb.sb_size -= nRead;
 	  nBytes = nRead;
 	  r->m_nBytesIn += nRead;
-	  if (r->m_bSendCounter && r->m_nBytesIn > (r->m_nBytesInSent + r->m_nClientBW / 10))
-	    if (!SendBytesReceived(r))
-	      return FALSE;
+          if (r->m_bSendCounter && r->m_nBytesIn > (r->m_nBytesInSent + r->m_nClientBW / 10))
+            if (!SendBytesReceived(r))
+              return FALSE;
 	}
       /*RTMP_Log(RTMP_LOGDEBUG, "%s: %d bytes\n", __FUNCTION__, nBytes); */
 #ifdef _DEBUG
@@ -2368,8 +2384,8 @@ static const AVal av_NetStream_Seek_Notify = AVC("NetStream.Seek.Notify");
 static const AVal av_NetStream_Pause_Notify = AVC("NetStream.Pause.Notify");
 static const AVal av_NetStream_Play_PublishNotify = AVC("NetStream.Play.PublishNotify");
 static const AVal av_NetStream_Play_UnpublishNotify = AVC("NetStream.Play.UnpublishNotify");
-static const AVal av_NetConnection_confStream = AVC("NetConnection.confStream");
 static const AVal av_NetStream_Publish_Start = AVC("NetStream.Publish.Start");
+static const AVal av_NetConnection_confStream = AVC("NetConnection.confStream");
 static const AVal av_verifyClient = AVC("verifyClient");
 static const AVal av_sendStatus = AVC("sendStatus");
 static const AVal av_getStreamLength = AVC("getStreamLength");
@@ -2451,8 +2467,12 @@ HandleInvoke(RTMP *r, const char *body, unsigned int nBodySize)
 	    }
           if (strstr(host, "tv-stream.to") || strstr(pageUrl, "tv-stream.to"))
             {
+              static char auth[] = {'h', 0xC2, 0xA7, '4', 'j', 'h', 'H', '4', '3', 'd'};
+              AVal av_auth;
               SAVC(requestAccess);
-              AVal av_auth = AVC("hÂ§4jhH43d");
+              av_auth.av_val = auth;
+              av_auth.av_len = sizeof (auth);
+
               enc = pbuf;
               enc = AMF_EncodeString(enc, pend, &av_requestAccess);
               enc = AMF_EncodeNumber(enc, pend, ++r->m_numInvokes);
@@ -2753,13 +2773,13 @@ HandleInvoke(RTMP *r, const char *body, unsigned int nBodySize)
 
       else if (AVMATCH(&code, &av_NetConnection_confStream))
         {
+#ifdef CRYPTO
           static const char hexdig[] = "0123456789abcdef";
           SAVC(cf_stream);
           int i;
           char hash_hex[33] = {0};
           unsigned char hash[16];
           AVal auth;
-
           param_count = strsplit(description.av_val, description.av_len, ':', &params);
           if (param_count >= 3)
             {
@@ -2787,6 +2807,7 @@ HandleInvoke(RTMP *r, const char *body, unsigned int nBodySize)
               SendInvoke(r, &av_Command, FALSE);
               free(buf);
             }
+#endif
         }
     }
   else if (AVMATCH(&method, &av_playlist_ready))
@@ -3448,8 +3469,18 @@ HandShake(RTMP *r, int FP9HandShake)
       serversig[4], serversig[5], serversig[6], serversig[7]);
 
   /* 2nd part of handshake */
-  if (!WriteN(r, serversig, RTMP_SIG_SIZE))
-    return FALSE;
+  if (r->Link.CombineConnectPacket)
+    {
+      char *HandshakeResponse = malloc(RTMP_SIG_SIZE);
+      memcpy(HandshakeResponse, (char *) serversig, RTMP_SIG_SIZE);
+      r->Link.HandshakeResponse.av_val = HandshakeResponse;
+      r->Link.HandshakeResponse.av_len = RTMP_SIG_SIZE;
+    }
+  else
+    {
+      if (!WriteN(r, (char *) serversig, RTMP_SIG_SIZE))
+        return FALSE;
+    }
 
   if (ReadN(r, serversig, RTMP_SIG_SIZE) != RTMP_SIG_SIZE)
     return FALSE;
@@ -4055,7 +4086,7 @@ HTTP_read(RTMP *r, int fill)
     return -1;
   ptr += 4;
   int resplen = r->m_sb.sb_size - (ptr - r->m_sb.sb_start);
-  if (hlen < 3584)
+  if (hlen < 4096)
     while (resplen < hlen)
       {
         if (RTMPSockBuf_Fill(&r->m_sb) == -1)
